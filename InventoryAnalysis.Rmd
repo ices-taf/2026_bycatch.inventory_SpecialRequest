@@ -21,65 +21,18 @@ library(patchwork)
 library(ggokabeito)
 ```
 
-```{r}
-# READ data 
-
-# New datacall 
-path <- "Data/"
-d2 <- read.csv(paste0(path, "D2.csv"))
-# Need to filter to avoid overlap 
-d2 <- filter(d2, Year > 2020)
-d4 <- read.csv(paste0(path, "D4.csv"))
-
-
-# Old datacall 
-d2old <- read_xlsx(paste0(path, "eu.2022.04b_dataset.xlsx"), sheet = "Coverage")
-d2old <- filter(d2old, Year >= 2017 & Year <= 2020)
-## Remove first row - 
-d2old <- d2old[-1, ]
-## Rename colnames 
-names(d2old) <- c(
-  "Country",
-  "Year",
-  "SamplingScheme",
-  "Gear",
-  "AreaCode",
-  "NoTripsSampled",
-  "NoTripsTotal",
-  "SamplingIntensity",
-  "ImportanceBirds",
-  "ImportanceMammals",
-  "ImportancePetFish",
-  "ImportanceElasmobranchs",
-  "ImportanceReptiles",
-  "Comments"
-)
-
-d4old <- read_xlsx(paste0(path, "eu.2022.04b_dataset.xlsx"), sheet = "Sample schemes bycatch studies")
-d4old <- d4old[-1, ]
-
-# RDBES - CE 
-#ce <- read.csv(paste0(path, "CommercialEffort.csv"))
-# Filter out countries that did not respond to the datacall
-# unique(d2$Country)
-# unique(ce$CEvesselFlagCountry)
-
-#ce <- filter(ce, CEvesselFlagCountry %in% unique(d2$Country))
-# setdiff(unique(d2$Country), unique(ce$CEvesselFlagCountry)) # med countries and PT-20 excl - correct
-```
-
 
 ```{r}
-# Useful fun 
+# Useful fun
 classify_gear <- function(x) {
-  
+
   # capture the NAs
   if (is.na(x)) return(NA_character_)
-  
+
   # split on underscores and treat each piece as a separate code
   parts <- unlist(str_split(x, "_"))
   parts <- parts[str_detect(parts, "^[A-Za-z]+$")]
-  
+
   # helper for standalone-ish match
   tok <- function(x) paste0("(?<![A-Z])(", x, ")(?![A-Z])")
 
@@ -118,7 +71,7 @@ expandIcesArea <- function(x) {
   if (x == "27") return(x)
   if (str_detect(x, "^27\\.[0-9]+(\\.[A-Za-z0-9]+)*$")) return(x)
 
-  # 27.4b, 27.7bcjk 
+  # 27.4b, 27.7bcjk
   if (str_detect(x, "^27\\.[0-9]+[A-Za-z]+$")) {
     num     <- str_match(x, "^27\\.([0-9]+)")[, 2]
     letters <- str_match(x, "^27\\.[0-9]+([A-Za-z]+)$")[, 2]
@@ -127,7 +80,7 @@ expandIcesArea <- function(x) {
     return(sprintf("27.%s.%s", num, letters_vec))
   }
 
-  # 7bcjk, 7fgh etc 
+  # 7bcjk, 7fgh etc
   if (str_detect(x, "^[0-9]+[A-Za-z]+$")) {
     num     <- str_match(x, "^([0-9]+)")[, 2]
     letters <- str_match(x, "^[0-9]+([A-Za-z]+)$")[, 2]
@@ -160,7 +113,7 @@ parse_one_code <- function(code) {
   # Split on both "~" and "," (mixed strings)
   parts <- str_split(code, "[~,]")[[1]] %>%
     str_squish()
-  
+
   parts <- parts[parts != ""]
 
   map_dfr(parts, function(p) {
@@ -172,7 +125,7 @@ parse_one_code <- function(code) {
       ))
     }
 
-   #  explicit GSA + number 
+   #  explicit GSA + number
     if (str_detect(str_to_upper(p), "^GSA\\s*\\d+$")) {
       num <- as.integer(str_extract(p, "\\d+"))
       return(tibble(
@@ -218,7 +171,7 @@ parse_one_code <- function(code) {
       ))
     }
 
-    # Unknown stuff 
+    # Unknown stuff
     tibble(
       original        = orig,
       AreaCode_system = "Unknown",
@@ -227,21 +180,21 @@ parse_one_code <- function(code) {
   })
 }
 
-# 
+#
 
 ```
 
 ```{r}
-# Bind the d2 
+# Bind the d2
 d2 <- mutate(d2, Source = "2025DC")
-d2old <- mutate(d2old, 
+d2old <- mutate(d2old,
                 NoTripsSampled = as.numeric(NoTripsSampled),
                 NoTripsTotal = as.numeric(NoTripsTotal),
                 Source = "2020DC")
 d2all<- bind_rows(d2, d2old)
 
-# mutate PT-20 to PT and the two codes for Germany 
-d2all <- mutate(d2all, Country = ifelse(Country %in% "PT-20", "PT", 
+# mutate PT-20 to PT and the two codes for Germany
+d2all <- mutate(d2all, Country = ifelse(Country %in% "PT-20", "PT",
                                         ifelse(Country %in% "DEU", "DE", Country)))
 
 ```
@@ -250,7 +203,7 @@ d2all <- mutate(d2all, Country = ifelse(Country %in% "PT-20", "PT",
 
 # Overview
 
-Number of countries responded in the 2020 and 2025 datacall respectively. 
+Number of countries responded in the 2020 and 2025 datacall respectively.
 
 ```{r}
 d2Tab <- d2all %>%
@@ -259,7 +212,7 @@ d2Tab <- d2all %>%
             Countries = paste0(sort(unique(Country)), collapse = ", "))
 
 d2Tab  %>%
-  datatable(extensions = 'Buttons', rownames = FALSE, 
+  datatable(extensions = 'Buttons', rownames = FALSE,
             options = list(dom = 'Blfrtip',
                            buttons = c('copy', 'csv', 'excel'),
                            lengthMenu = list(c(10,25,50,-1),
@@ -267,20 +220,20 @@ d2Tab  %>%
 ```
 
 
-# Data cleaning 
+# Data cleaning
 
-## Gear/Metier groupings 
+## Gear/Metier groupings
 
-The metiers reported by each country were grouped into six categories: 
+The metiers reported by each country were grouped into six categories:
 
 1. Pelagic trawl
 2. Demersal trawl
 3. Demersal seine
 4. Pelagic seine
 5. Lines and hooks
-6. Others 
+6. Others
 
-The table below shows how metiers were grouped to the categories above: 
+The table below shows how metiers were grouped to the categories above:
 
 
 ```{r}
@@ -292,7 +245,7 @@ d2allg <- d2all %>%
          GearGroup = vapply(Gear, classify_gear, character(1)))
 tabgear <- distinct(d2allg, Gear, GearGroup)
 tabgear %>%
-  datatable(extensions = 'Buttons', rownames = FALSE, 
+  datatable(extensions = 'Buttons', rownames = FALSE,
             options = list(dom = 'Blfrtip',
                            buttons = c('copy', 'csv', 'excel'),
                            lengthMenu = list(c(10,25,50,-1),
@@ -305,7 +258,7 @@ tabgear %>%
 
 
 ```{r}
-# Look up table 
+# Look up table
 ices_divisions <- tribble(
   ~subarea,   ~division,
   # 27.1
@@ -417,10 +370,10 @@ d2div <- d2_expanded %>%
 
 
 ```{r}
-# Fix specific stuff 
+# Fix specific stuff
 d2div <- mutate(d2div, AreaCode = ifelse(AreaCode %in% "37.2.1", "GSA 17", AreaCode))
 # Exclude 3271 France (talked with Sebastien)
-# Exclude 27.3.bc 
+# Exclude 27.3.bc
 d2div <- filter(d2div, !(AreaCode %in% "3721" & Country %in% "FR"& Source %in% "2025DC"))
 d2div <- filter(d2div, !(AreaCode %in% "27.3.bc" & Country %in% "FR"& Source %in% "2025DC"))
 # Reassign 3.a to 4.b (rectangle ovelap issue)
@@ -429,7 +382,7 @@ d2div <- mutate(d2div, AreaCode = ifelse(Country %in% "FR" & AreaCode %in% "27.3
 # Exclude Finland area 27.3.d. (all Baltic) - Email for new submission: Done
 # d2div <- filter(d2div, !AreaCode %in% "27.3.d.")
 
-# Fix Slovenia 
+# Fix Slovenia
 d2div <- mutate(d2div, AreaCode_system = ifelse(Country %in% "SI", "GSA", AreaCode_system))
 
 
@@ -449,14 +402,14 @@ d2div <- d2div %>%
 ```{r}
 #ce <- mutate(ce, AreaCode = ifelse(substr(CEarea, 1, 4) == "27.3", substr(CEarea, 1, 9), sub("^(([^.]*\\.){2}[^.]*).*", "\\1", CEarea)))
 
-# TODO - This assumption 
-# Filter out records with very low number of trips 
+# TODO - This assumption
+# Filter out records with very low number of trips
 #cef <- filter(ce, CEnumberOfFractionalTrips > 0.1)
 # quantile(ce$CEnumberOfFractionalTrips, probs = seq(0, 1, by = 0.1), na.rm = TRUE)
 # quantile(ce$CEnumberOfDominantTrips, probs = 0.95, na.rm = TRUE)
 # hist(ce$CEnumberOfDominantTrips, breaks = 1000, xlim = c(0,200))
 # hist(log10(ce$CEofficialDaysAtSea + 0.01), breaks = 100)
-# # 
+# #
 # ggplot(ce, aes(CEnumberOfDominantTrips,CEnumberOfFractionalTrips )) +
 #   geom_point()
 #cef <- distinct(cef, AreaCode, CEmetier6)
@@ -474,7 +427,7 @@ nor <- filter(d2div, !AreaCode_system == "GSA")
 ## ICES
 
 ```{r}
-# Determine sampling schemes with logbooks monitoring method 
+# Determine sampling schemes with logbooks monitoring method
 d4oldmm <- filter(d4old, `Monitoring method` %in% "Logbook") # old dataset only one and removed either way due to NAs in almost all other variables
 d4mm <- filter(d4, MonitoringMethod %in% "LB")  # Estonia
 remLB <- unique(d4mm$SamplingScheme)
@@ -488,14 +441,14 @@ remLB <- unique(d4mm$SamplingScheme)
 
 current_year <- year(Sys.Date())
 
-# Factors to be plotted in order 
+# Factors to be plotted in order
 dfnor <- nor  %>%
   mutate(AreaCode2 = factor(AreaCode, levels = unique(ices_divisions$division)),
          GearGroup1 = factor(GearGroup, levels = c("DemTrawl", "DemSeine","Gillnetters", "LinesHooks", "PelSeine", "PelTrawl", "Others")))
 
 # Remove NAFO areas
 dfnor <- filter(dfnor, !is.na(AreaCode2))
-  
+
 # With zeros - NAs are created by expanding the df
 # These have been left in - Need to check if they correspond to 0 trips sampled
 yearsCellWZ <- dfnor %>%
@@ -504,9 +457,9 @@ yearsCellWZ <- dfnor %>%
   group_by(AreaCode2, GearGroup1) %>%
   summarise(NoYears = length(unique(Year)))
 
-# Without 0's 
+# Without 0's
 yearsCellWTZ <- dfnor %>%
-  filter(Year >= 2017 & Year < 2025) %>% 
+  filter(Year >= 2017 & Year < 2025) %>%
   filter(!SamplingScheme %in% remLB) %>%
   filter(NoTripsSampled != 0) %>%
   filter(is.na(NoTripsSampled) == F) %>%
@@ -546,7 +499,7 @@ ggsave("Fig3.png", Fig3, width = 20, height=16.5, units=c("cm"), dpi=300)
 ```
 
 
-### Coverage by sampling scheme 
+### Coverage by sampling scheme
 
 
 ```{r, fig.dim= c(16, 12)}
@@ -558,9 +511,9 @@ yearsCellWZ <- dfnor %>%
   group_by(AreaCode2, GearGroup1) %>%
   summarise(NoSampScheme = length(unique(SamplingScheme)))
 
-# Without 0's 
+# Without 0's
 yearsCellWTZ <- dfnor %>%
-  filter(Year >= 2017 & Year < 2025) %>% 
+  filter(Year >= 2017 & Year < 2025) %>%
   filter(!SamplingScheme %in% remLB) %>%
   filter(NoTripsSampled != 0) %>%
   group_by(AreaCode2, GearGroup1) %>%
@@ -592,19 +545,19 @@ b <- ggplot(yearsCellWTZ, aes(x = GearGroup1, y = AreaCode2, fill = factor(NoSam
 grid.arrange(a, b, ncol=2)
 ```
 
-### Coverage by sampling effort 
+### Coverage by sampling effort
 ```{r, fig.dim= c(16, 12)}
 # With zeros - NAs are created by expanding the df
 # These have been left in - Need to check if they correspond to 0 trips sampled
 yearsCellWZ <- dfnor %>%
-  filter(Year >= 2017 & Year < 2025) %>% # 
+  filter(Year >= 2017 & Year < 2025) %>% #
   filter(!SamplingScheme %in% remLB) %>%
   group_by(AreaCode2, GearGroup1) %>%
   summarise(NoTripsSampled = sum(NoTripsSampled, na.rm = TRUE))
 
-# Without 0's 
+# Without 0's
 yearsCellWTZ <- dfnor %>%
-  filter(Year >= 2017 & Year < 2025) %>% # 
+  filter(Year >= 2017 & Year < 2025) %>% #
   filter(!SamplingScheme %in% remLB) %>%
   filter(NoTripsSampled != 0) %>%
   group_by(AreaCode2, GearGroup1) %>%
@@ -640,9 +593,9 @@ grid.arrange(a, b, ncol=2)
 
 ```{r, fig.dim= c(16, 12)}
 dfnornew <- filter(dfnor, Source %in% "2025DC") %>%
-  filter(Year >= 2021 & Year < 2025) %>% # 
+  filter(Year >= 2021 & Year < 2025) %>% #
   filter(!SamplingScheme %in% remLB) %>%
-  filter(NoTripsSampled != 0) 
+  filter(NoTripsSampled != 0)
 cemerg <- left_join(cef, dfnornew, by = c("AreaCode" = "AreaCode2", "GearGroup" = "GearGroup1"))
 
 cefin <- distinct(cemerg, AreaCode, GearGroup, .orig_row) %>%
@@ -674,14 +627,14 @@ ggplot(cefin , aes(x = GearGroup, y = AreaCode, fill = Sampled)) +
 
 ```{r, fig.dim= c(16, 12)}
 
-# Factors to be plotted in order 
+# Factors to be plotted in order
 dfmed<- med  %>%
   mutate(AreaCode2 = factor(AreaCode, levels = paste0("GSA ", seq(1:30))),
          GearGroup1 = factor(GearGroup, levels = c("DemTrawl", "DemSeine","Gillnetters", "LinesHooks", "PelSeine", "PelTrawl", "Others")))
 
 # Remove NAFO areas
 dfmed <- filter(dfmed, !is.na(AreaCode2))
-  
+
 # With zeros - NAs are created by expanding the df
 # These have been left in - Need to check if they correspond to 0 trips sampled
 yearsCellWZ <- dfmed %>%
@@ -691,9 +644,9 @@ yearsCellWZ <- dfmed %>%
   group_by(AreaCode2, GearGroup1) %>%
   summarise(NoYears = length(unique(Year)))
 
-# Without 0's 
+# Without 0's
 yearsCellWTZ <- dfmed %>%
-  filter(Year >= 2017 & Year < 2025) %>% 
+  filter(Year >= 2017 & Year < 2025) %>%
   filter(!SamplingScheme %in% remLB) %>%
   filter(is.na(GearGroup1) == F) %>%
   filter(NoTripsSampled != 0) %>%
@@ -734,7 +687,7 @@ Fig4
 ggsave("Fig4.png", Fig4, width = 20.5, height = 10, units = "cm", dpi = 300)
 ```
 
-### Coverage by sampling scheme 
+### Coverage by sampling scheme
 
 ```{r, fig.dim= c(16, 12)}
 # With zeros - NAs are created by expanding the df
@@ -745,9 +698,9 @@ yearsCellWZ <- dfmed %>%
   group_by(AreaCode2, GearGroup1) %>%
   summarise(NoSampScheme = length(unique(SamplingScheme)))
 
-# Without 0's 
+# Without 0's
 yearsCellWTZ <- dfmed %>%
-  filter(Year >= 2017 & Year < 2025) %>% 
+  filter(Year >= 2017 & Year < 2025) %>%
   filter(!SamplingScheme %in% remLB) %>%
   filter(NoTripsSampled != 0) %>%
   group_by(AreaCode2, GearGroup1) %>%
@@ -780,20 +733,20 @@ grid.arrange(a, b, ncol=2)
 ```
 
 
-### Coverage by sampling effort 
+### Coverage by sampling effort
 
 ```{r, fig.dim= c(16, 12)}
 # With zeros - NAs are created by expanding the df
 # These have been left in - Need to check if they correspond to 0 trips sampled
 yearsCellWZ <- dfmed %>%
-  filter(Year >= 2017 & Year < 2025) %>% # 
+  filter(Year >= 2017 & Year < 2025) %>% #
   filter(!SamplingScheme %in% remLB) %>%
   group_by(AreaCode2, GearGroup1) %>%
   summarise(NoTripsSampled = sum(NoTripsSampled, na.rm = TRUE))
 
-# Without 0's 
+# Without 0's
 yearsCellWTZ <- dfmed %>%
-  filter(Year >= 2017 & Year < 2025) %>% # 
+  filter(Year >= 2017 & Year < 2025) %>% #
   filter(!SamplingScheme %in% remLB) %>%
   filter(NoTripsSampled != 0) %>%
   group_by(AreaCode2, GearGroup1) %>%
@@ -838,13 +791,13 @@ d4samType <- d4 %>%
 ```{r}
 #calculate range of programs
 #use only data from this year's call
-d4e <- d4 %>% 
+d4e <- d4 %>%
   mutate(End_year = replace(End_year, is.na(End_year) == T,2025)) %>%
   mutate(End_year = replace(End_year, End_year == 2026 | End_year == 2027, 2025)) %>%
   mutate(range = End_year - Start_year) %>%
   mutate(Start_year = replace(Start_year, Start_year <2017, 2016)) %>%
   mutate(range = End_year - Start_year +1) %>%
-  mutate(Start_year = replace(Start_year, Start_year <2017, "<2017")) 
+  mutate(Start_year = replace(Start_year, Start_year <2017, "<2017"))
 
 #filter for unique programs
 d4_unique <- d4e %>% dplyr::select(Start_year,End_year,SamplingScheme,range, SamplingSchemeType,MonitoringMethod, AreaCode, TargetPopulation) %>%
@@ -859,7 +812,7 @@ ggplot(d4e)+
 
 
 # #pull out columns of interest
-# d4e_sub <- d4 %>% 
+# d4e_sub <- d4 %>%
 #   filter(!MonitoringMethod == "LB") %>%
 #   mutate(End_year = replace(End_year, is.na(End_year) == T,2025)) %>%
 #   mutate(End_year = replace(End_year, End_year == 2026 | End_year == 2027, 2025)) %>%
@@ -877,10 +830,10 @@ ggplot(d4e)+
 #   temp[,1:ncol(d4e_sub)] <- program
 #   d4_byyear <- rbind(d4_byyear,temp)
 # }
-# 
+#
 # #time series of program type by monitoring method
 # #MINDFUL THAT WE KNOW THERE ARE ZEROS! Probably not good to do this
-# d4_byyear %>% 
+# d4_byyear %>%
 #   #filter(zero == "no") %>%
 # ggplot() +
 #   geom_bar(aes(x = Year, fill = MonitoringMethod), position = "stack") +
@@ -958,7 +911,7 @@ Fig7
 
 ggsave("Fig7.png", Fig7, width = 20, height=8, units=c("cm"), dpi=300)
 
-#curious about how many exclusions relate to uncooperative 
+#curious about how many exclusions relate to uncooperative
 length(which(exclusion$ExclusionCriteria %in% c("Uncooperative vessel", "Uncooperative vessel~Vessel space limitation", "Uncooperative vessel~Small vessel size")))
 ```
 
@@ -986,7 +939,7 @@ Fig5b <- ggplot(data = d4e) +
   theme_classic()+
   theme(axis.text.x = element_text(angle = 45, vjust = 0.9, hjust = 1))
 
-specific <- d4e %>% filter(!SamplingProtocol %in% c("All", "ProtectedSpecies", "Fish~ProtectedSpecies", "ProtectedSpecies~Elasmobranchs")) %>% 
+specific <- d4e %>% filter(!SamplingProtocol %in% c("All", "ProtectedSpecies", "Fish~ProtectedSpecies", "ProtectedSpecies~Elasmobranchs")) %>%
   count(SamplingProtocol)
 
 Fig5 <- Fig5a + Fig5b + plot_annotation(tag_levels = "A")
@@ -1035,7 +988,7 @@ ggplot(data = hist) +
 Programs that report zeros
 
 ```{r}
-#noticed a lot of NAs as well 
+#noticed a lot of NAs as well
 d2e <- d2e %>% mutate(NoTripsSampled = replace(NoTripsSampled, is.na(NoTripsSampled) == T, 0))
 
 zeros <- d2e %>% filter(NoTripsSampled == 0)
@@ -1048,7 +1001,7 @@ ggplot(data = zeros) +
 
 #are there cases where a program reports zeros in a year
 #Yes, 84 instances
-trips_annual <- d2e %>% group_by(SamplingScheme,Year) %>% 
+trips_annual <- d2e %>% group_by(SamplingScheme,Year) %>%
   mutate(annual_trips = sum(NoTripsSampled)) %>%
   dplyr::select(SamplingScheme,Year,annual_trips,Country) %>%
   distinct()
@@ -1072,10 +1025,10 @@ substrRight <- function(x, n){
 #classify by either CF or IB
 d4e <- d4e %>% mutate(SST = substrRight(SamplingSchemeType,2))
 
-d4_importance <- d4e %>% group_by(SST) %>% 
+d4_importance <- d4e %>% group_by(SST) %>%
   mutate(Mammals = mean(ImportanceMammals), Birds = mean(ImportanceBirds), Fish = mean(ImportancePETfish), Elasmobranchs = mean(ImportanceElasm), Reptiles = mean(ImportanceRept)) %>%
   dplyr::select(SST, Mammals, Birds, Fish, Elasmobranchs, Reptiles) %>% distinct()
-  
+
 d4_importance <- pivot_longer(d4_importance, !SST, names_to = "Taxon", values_to = "Importance")
 
 Fig6<- ggplot(data = d4_importance) +
@@ -1084,7 +1037,7 @@ Fig6<- ggplot(data = d4_importance) +
   scale_fill_okabe_ito(alpha = 0.75,labels = c("Commercial fisheries", "Incidental bycatch"))+
   #scale_fill_discrete(palette = c(pal[6],pal[5]),labels = c("Commercial fisheries", "Incidental bycatch"))+
   scale_y_continuous(expand = c(0,0))+
-  theme_classic() 
+  theme_classic()
 
 Fig6
 
@@ -1097,12 +1050,3 @@ part_observed <- d4 %>% group_by(PartObserved) %>% tally()
 length(which(grepl("So", d4$PartObserved) == T))
 
 ```
-
-
-
-
-
-
-
-
-
