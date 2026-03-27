@@ -1,0 +1,1108 @@
+---
+title: "WGCATCH 2025, ToR c BYC inventory"
+author: "Karolina, Sarah"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+
+```{r}
+# PACKAGES
+library(tidyverse, quietly = TRUE)
+library(DT)
+library(readxl)
+library(gridExtra)
+library(paletteer)
+library(ggpubr)
+library(patchwork)
+library(ggokabeito)
+```
+
+```{r}
+# READ data 
+
+# New datacall 
+path <- "Data/"
+d2 <- read.csv(paste0(path, "D2.csv"))
+# Need to filter to avoid overlap 
+d2 <- filter(d2, Year > 2020)
+d4 <- read.csv(paste0(path, "D4.csv"))
+
+
+# Old datacall 
+d2old <- read_xlsx(paste0(path, "eu.2022.04b_dataset.xlsx"), sheet = "Coverage")
+d2old <- filter(d2old, Year >= 2017 & Year <= 2020)
+## Remove first row - 
+d2old <- d2old[-1, ]
+## Rename colnames 
+names(d2old) <- c(
+  "Country",
+  "Year",
+  "SamplingScheme",
+  "Gear",
+  "AreaCode",
+  "NoTripsSampled",
+  "NoTripsTotal",
+  "SamplingIntensity",
+  "ImportanceBirds",
+  "ImportanceMammals",
+  "ImportancePetFish",
+  "ImportanceElasmobranchs",
+  "ImportanceReptiles",
+  "Comments"
+)
+
+d4old <- read_xlsx(paste0(path, "eu.2022.04b_dataset.xlsx"), sheet = "Sample schemes bycatch studies")
+d4old <- d4old[-1, ]
+
+# RDBES - CE 
+#ce <- read.csv(paste0(path, "CommercialEffort.csv"))
+# Filter out countries that did not respond to the datacall
+# unique(d2$Country)
+# unique(ce$CEvesselFlagCountry)
+
+#ce <- filter(ce, CEvesselFlagCountry %in% unique(d2$Country))
+# setdiff(unique(d2$Country), unique(ce$CEvesselFlagCountry)) # med countries and PT-20 excl - correct
+```
+
+
+```{r}
+# Useful fun 
+classify_gear <- function(x) {
+  
+  # capture the NAs
+  if (is.na(x)) return(NA_character_)
+  
+  # split on underscores and treat each piece as a separate code
+  parts <- unlist(str_split(x, "_"))
+  parts <- parts[str_detect(parts, "^[A-Za-z]+$")]
+  
+  # helper for standalone-ish match
+  tok <- function(x) paste0("(?<![A-Z])(", x, ")(?![A-Z])")
+
+  cats <- c(
+    PelTrawl = any(str_detect(parts, regex(tok("OTM|PTM|PT"), ignore_case = TRUE))),
+    DemTrawl = any(str_detect(parts, regex(tok("OTB|PTB|TBB|OTT|TB"), ignore_case = TRUE))),
+    DemSeine = any(str_detect(parts, regex(tok("SSC|SPR|SDN"), ignore_case = TRUE))),
+    PelSeine = any(str_detect(parts, regex(tok("PS"), ignore_case = TRUE))),
+    LinesHooks = any(str_detect(parts, regex(tok("LLD|LLS|LH|LHP|LHM|LTL"), ignore_case = TRUE))),
+    Gillnetters = any(str_detect(parts, regex(tok("GNS|GTR|GN|GND|GTN|GNC"), ignore_case = TRUE)))
+  )
+
+  # free-text rules look at full string
+  cats["PelTrawl"]    <- cats["PelTrawl"]    | str_detect(x, regex("pelagic trawler", ignore_case = TRUE))
+  cats["Gillnetters"] <- cats["Gillnetters"] | str_detect(x, regex("gillnetter", ignore_case = TRUE))
+  cats["DemTrawl"]    <- cats["DemTrawl"]    | (str_detect(x, regex("trawler", ignore_case = TRUE)) &
+                                                 str_detect(x, regex("demersal|cod", ignore_case = TRUE)))
+
+  present <- names(cats)[cats]
+
+  if (length(present) == 0) {
+    "Others"
+  } else if (length(present) == 1) {
+    present
+  } else {
+    paste0("Multiple (", paste(sort(present), collapse = "+"), ")")
+  }
+}
+
+# Expand area
+expandIcesArea <- function(x) {
+  x <- str_replace_all(x, " ", "")
+  x <- str_replace(x, "\\.$", "")   # drop dot
+
+  # Pure 27 region or fully specified already
+  if (x == "27") return(x)
+  if (str_detect(x, "^27\\.[0-9]+(\\.[A-Za-z0-9]+)*$")) return(x)
+
+  # 27.4b, 27.7bcjk 
+  if (str_detect(x, "^27\\.[0-9]+[A-Za-z]+$")) {
+    num     <- str_match(x, "^27\\.([0-9]+)")[, 2]
+    letters <- str_match(x, "^27\\.[0-9]+([A-Za-z]+)$")[, 2]
+    letters_vec <- strsplit(letters, "")[[1]]
+    letters_vec <- letters_vec[letters_vec != ""]
+    return(sprintf("27.%s.%s", num, letters_vec))
+  }
+
+  # 7bcjk, 7fgh etc 
+  if (str_detect(x, "^[0-9]+[A-Za-z]+$")) {
+    num     <- str_match(x, "^([0-9]+)")[, 2]
+    letters <- str_match(x, "^[0-9]+([A-Za-z]+)$")[, 2]
+    letters_vec <- strsplit(letters, "")[[1]]
+    letters_vec <- letters_vec[letters_vec != ""]
+    return(sprintf("27.%s.%s", num, letters_vec))
+  }
+
+  # 27.1, 27.12 etc keep as is will be expanded
+  if (str_detect(x, "^27\\.\\d+$")) return(x)
+
+  # Fallback: keep unchanged
+  x
+}
+
+# Parse
+parse_one_code <- function(code) {
+  orig <- code
+
+  code <- str_squish(code)
+
+  if (is.na(code) || code == "" || code == "NA") {
+    return(tibble(
+      original       = orig,
+      AreaCode_system = NA_character_,
+      AreaCode        = NA_character_
+    ))
+  }
+
+  # Split on both "~" and "," (mixed strings)
+  parts <- str_split(code, "[~,]")[[1]] %>%
+    str_squish()
+  
+  parts <- parts[parts != ""]
+
+  map_dfr(parts, function(p) {
+    if (is.na(p) || p == "") {
+      return(tibble(
+        original        = orig,
+        AreaCode_system = NA_character_,
+        AreaCode        = NA_character_
+      ))
+    }
+
+   #  explicit GSA + number 
+    if (str_detect(str_to_upper(p), "^GSA\\s*\\d+$")) {
+      num <- as.integer(str_extract(p, "\\d+"))
+      return(tibble(
+        original        = orig,
+        AreaCode_system = "GSA",
+        AreaCode        = paste0("GSA ", num)
+      ))
+    }
+
+    # Plain digits
+    if (str_detect(p, "^\\d{1,2}$")) {
+      # If original string has a 27.* and no 'GSA'  interpret as 27.<n> (like 27.12,14)
+      if (str_detect(orig, "27\\.") &&
+          !str_detect(orig, regex("\\bGSA\\b", ignore_case = TRUE))) {
+        new_code <- paste0("27.", p)
+        return(tibble(
+          original        = orig,
+          AreaCode_system = "ICES",
+          AreaCode        = new_code
+        ))
+      } else {
+        # Otherwise treat as GSA number
+        num <- as.integer(p)
+        return(tibble(
+          original        = orig,
+          AreaCode_system = "GSA",
+          AreaCode        = paste0("GSA ", num)
+        ))
+      }
+    }
+
+    p_clean <- str_replace_all(p, " ", "")
+    p_clean <- str_replace(p_clean, "\\.$", "")
+
+    if (str_detect(p_clean, "^27(\\.|$)") ||
+        str_detect(p_clean, "^[0-9]+[A-Za-z]+$")) {
+      expanded <- expandIcesArea(p_clean)
+      # expanded may be length > 1
+      return(tibble(
+        original        = orig,
+        AreaCode_system = "ICES",
+        AreaCode        = expanded
+      ))
+    }
+
+    # Unknown stuff 
+    tibble(
+      original        = orig,
+      AreaCode_system = "Unknown",
+      AreaCode        = p
+    )
+  })
+}
+
+# 
+
+```
+
+```{r}
+# Bind the d2 
+d2 <- mutate(d2, Source = "2025DC")
+d2old <- mutate(d2old, 
+                NoTripsSampled = as.numeric(NoTripsSampled),
+                NoTripsTotal = as.numeric(NoTripsTotal),
+                Source = "2020DC")
+d2all<- bind_rows(d2, d2old)
+
+# mutate PT-20 to PT and the two codes for Germany 
+d2all <- mutate(d2all, Country = ifelse(Country %in% "PT-20", "PT", 
+                                        ifelse(Country %in% "DEU", "DE", Country)))
+
+```
+
+
+
+# Overview
+
+Number of countries responded in the 2020 and 2025 datacall respectively. 
+
+```{r}
+d2Tab <- d2all %>%
+  group_by(Source) %>%
+  summarise(NoCountries = length(unique(Country)),
+            Countries = paste0(sort(unique(Country)), collapse = ", "))
+
+d2Tab  %>%
+  datatable(extensions = 'Buttons', rownames = FALSE, 
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+```
+
+
+# Data cleaning 
+
+## Gear/Metier groupings 
+
+The metiers reported by each country were grouped into six categories: 
+
+1. Pelagic trawl
+2. Demersal trawl
+3. Demersal seine
+4. Pelagic seine
+5. Lines and hooks
+6. Others 
+
+The table below shows how metiers were grouped to the categories above: 
+
+
+```{r}
+# Group metiers - inventories
+
+d2allg <- d2all %>%
+  separate_rows(Gear, sep = "[,;/]\\s*") %>%
+  mutate(Gear = str_trim(Gear),
+         GearGroup = vapply(Gear, classify_gear, character(1)))
+tabgear <- distinct(d2allg, Gear, GearGroup)
+tabgear %>%
+  datatable(extensions = 'Buttons', rownames = FALSE, 
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+# Group gears - CE - run at the end its taking too long
+# ce <- mutate(ce, GearGroup = vapply(CEmetier6, classify_gear, character(1))) # takes too long
+# tabgearce <- distinct(ce, CEmetier6, GearGroup)
+# datatable(tabgearce, caption = "Grouped metiers in the old datacall")
+```
+
+
+```{r}
+# Look up table 
+ices_divisions <- tribble(
+  ~subarea,   ~division,
+  # 27.1
+  "27.1",     "27.1.a",
+  "27.1",     "27.1.b",
+  # 27.2
+  "27.2",     "27.2.a",
+  "27.2",     "27.2.b",
+  # 27.3 (Baltic + Kattegat)
+  "27.3.a",   "27.3.a.20",
+  "27.3.a",   "27.3.a.21",
+  "27.3.b",   "27.3.b.23",
+  "27.3.c",   "27.3.c.22",
+  # 27.3.d (Baltic Proper) incl. 28.1/28.2
+  "27.3.d",   "27.3.d.24",
+  "27.3.d",   "27.3.d.25",
+  "27.3.d",   "27.3.d.26",
+  "27.3.d",   "27.3.d.27",
+  "27.3.d",   "27.3.d.28",
+  "27.3.d",   "27.3.d.28.1",
+  "27.3.d",   "27.3.d.28.2",
+  "27.3.d",   "27.3.d.29",
+  "27.3.d",   "27.3.d.30",
+  "27.3.d",   "27.3.d.31",
+  "27.3.d",   "27.3.d.32",
+  # 27.4 (North Sea)
+  "27.4",     "27.4.a",
+  "27.4",     "27.4.b",
+  "27.4",     "27.4.c",
+  # 27.5 (Iceland & Faroes)
+  "27.5",     "27.5.a",
+  "27.5",     "27.5.b",
+  # 27.6 (W of Scotland/Rockall)
+  "27.6",     "27.6.a",
+  "27.6",     "27.6.b",
+  "27.6.b",   "27.6.b.1",
+  # 27.7 (Celtic/Biscay)
+  "27.7",     "27.7.a",
+  "27.7",     "27.7.b",
+  "27.7",     "27.7.c",
+  "27.7",     "27.7.d",
+  "27.7",     "27.7.e",
+  "27.7",     "27.7.f",
+  "27.7",     "27.7.g",
+  "27.7",     "27.7.h",
+  "27.7",     "27.7.j",
+  "27.7",     "27.7.k",
+  # 27.8 (Bay of Biscay)
+  "27.8",     "27.8.a",
+  "27.8",     "27.8.b",
+  "27.8",     "27.8.c",
+  "27.8",     "27.8.d",
+  "27.8",     "27.8.e",
+  # 27.9
+  "27.9",     "27.9.a",
+  "27.9",     "27.9.b.1",
+  "27.9",     "27.9.b.2",
+  "27.9",     "27.9.b",
+  # 27.10 (Azores)
+  "27.10",    "27.10.a",
+  "27.10.a",  "27.10.a.1",
+  "27.10.a",  "27.10.a.2",
+  "27.10",    "27.10.b",
+  # 27.12 (Svalbard/Barents fringe)
+  "27.12",    "27.12.a",
+  "27.12",    "27.12.b",
+  "27.12",    "27.12.c",
+  # 27.14 (Greenland)
+  "27.14",    "27.14.a",
+  "27.14",    "27.14.b"
+)
+```
+
+```{r}
+
+# Collapse list cols, keep original row
+d2e <- d2allg %>%
+  ungroup() %>%
+  mutate(.orig_row = row_number()) %>%
+  rowwise() %>%
+  mutate(
+    AreaCode_collapsed = paste(AreaCode, collapse = "~")
+  ) %>%
+  ungroup()
+
+# Expand general
+d2_expanded <- d2e %>%
+select(-AreaCode) %>%
+  mutate(parsed = map(AreaCode_collapsed, parse_one_code)) %>% # the error is in the nested functions above, not here
+  unnest(parsed) %>%
+  # clean up
+  select(-AreaCode_collapsed)
+
+# Expand subarea -> subdiv
+d2div <- d2_expanded %>%
+  mutate(
+    AreaCode = str_trim(AreaCode)   # just in case there are stray spaces
+  ) %>%
+  left_join(ices_divisions, by = c("AreaCode" = "subarea")) %>%
+  mutate(
+    # if AreaCode matches a subarea in the lookup, use that division,
+    # otherwise keep the original AreaCode
+    AreaCode1 = if_else(!is.na(division), division, AreaCode)
+  ) %>%
+  select(-division) %>%
+  distinct(.orig_row, AreaCode1, AreaCode_system, .keep_all = TRUE)
+
+```
+
+
+```{r}
+# Fix specific stuff 
+d2div <- mutate(d2div, AreaCode = ifelse(AreaCode %in% "37.2.1", "GSA 17", AreaCode))
+# Exclude 3271 France (talked with Sebastien)
+# Exclude 27.3.bc 
+d2div <- filter(d2div, !(AreaCode %in% "3721" & Country %in% "FR"& Source %in% "2025DC"))
+d2div <- filter(d2div, !(AreaCode %in% "27.3.bc" & Country %in% "FR"& Source %in% "2025DC"))
+# Reassign 3.a to 4.b (rectangle ovelap issue)
+d2div <- mutate(d2div, AreaCode = ifelse(Country %in% "FR" & AreaCode %in% "27.3.a"& Source %in% "2025DC", "27.4.b", AreaCode))
+
+# Exclude Finland area 27.3.d. (all Baltic) - Email for new submission: Done
+# d2div <- filter(d2div, !AreaCode %in% "27.3.d.")
+
+# Fix Slovenia 
+d2div <- mutate(d2div, AreaCode_system = ifelse(Country %in% "SI", "GSA", AreaCode_system))
+
+
+# Several records in the old datacall don't have area
+naArea <- filter(d2div, is.na(AreaCode))
+d2div <- filter(d2div, !is.na(AreaCode))
+```
+
+
+```{r}
+d2div <- d2div %>%
+  mutate(AreaCode = ifelse(substr(AreaCode1, 1, 4) == "27.3", substr(AreaCode1, 1, 9), sub("^(([^.]*\\.){2}[^.]*).*", "\\1", AreaCode1)))
+
+```
+
+
+```{r}
+#ce <- mutate(ce, AreaCode = ifelse(substr(CEarea, 1, 4) == "27.3", substr(CEarea, 1, 9), sub("^(([^.]*\\.){2}[^.]*).*", "\\1", CEarea)))
+
+# TODO - This assumption 
+# Filter out records with very low number of trips 
+#cef <- filter(ce, CEnumberOfFractionalTrips > 0.1)
+# quantile(ce$CEnumberOfFractionalTrips, probs = seq(0, 1, by = 0.1), na.rm = TRUE)
+# quantile(ce$CEnumberOfDominantTrips, probs = 0.95, na.rm = TRUE)
+# hist(ce$CEnumberOfDominantTrips, breaks = 1000, xlim = c(0,200))
+# hist(log10(ce$CEofficialDaysAtSea + 0.01), breaks = 100)
+# # 
+# ggplot(ce, aes(CEnumberOfDominantTrips,CEnumberOfFractionalTrips )) +
+#   geom_point()
+#cef <- distinct(cef, AreaCode, CEmetier6)
+#cef <- mutate(cef, GearGroup = vapply(CEmetier6, classify_gear, character(1)))
+
+```
+
+
+```{r}
+med <- filter(d2div, AreaCode_system == "GSA")
+# Slovenia is grouped with ICES area codes need to fix: Done
+nor <- filter(d2div, !AreaCode_system == "GSA")
+```
+
+## ICES
+
+```{r}
+# Determine sampling schemes with logbooks monitoring method 
+d4oldmm <- filter(d4old, `Monitoring method` %in% "Logbook") # old dataset only one and removed either way due to NAs in almost all other variables
+d4mm <- filter(d4, MonitoringMethod %in% "LB")  # Estonia
+remLB <- unique(d4mm$SamplingScheme)
+```
+
+
+### Coverage by year
+
+
+```{r, fig.dim= c(16, 12)}
+
+current_year <- year(Sys.Date())
+
+# Factors to be plotted in order 
+dfnor <- nor  %>%
+  mutate(AreaCode2 = factor(AreaCode, levels = unique(ices_divisions$division)),
+         GearGroup1 = factor(GearGroup, levels = c("DemTrawl", "DemSeine","Gillnetters", "LinesHooks", "PelSeine", "PelTrawl", "Others")))
+
+# Remove NAFO areas
+dfnor <- filter(dfnor, !is.na(AreaCode2))
+  
+# With zeros - NAs are created by expanding the df
+# These have been left in - Need to check if they correspond to 0 trips sampled
+yearsCellWZ <- dfnor %>%
+  filter(Year >= 2017 & Year < 2025) %>% # 2017 - 2024
+  filter(!SamplingScheme %in% remLB) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoYears = length(unique(Year)))
+
+# Without 0's 
+yearsCellWTZ <- dfnor %>%
+  filter(Year >= 2017 & Year < 2025) %>% 
+  filter(!SamplingScheme %in% remLB) %>%
+  filter(NoTripsSampled != 0) %>%
+  filter(is.na(NoTripsSampled) == F) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoYears = length(unique(Year)))
+
+
+a <- ggplot(yearsCellWZ, aes(x = GearGroup1, y = AreaCode2, fill = factor(NoYears))) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_d(name = "Years") +
+  labs(
+    x = "Gear",
+    y = "ICES area",
+    title = "Unique year coverage by gear and ICES area incl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+b <- ggplot(yearsCellWTZ, aes(x = GearGroup1, y = AreaCode2, fill = factor(NoYears))) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_d(name = "Years", alpha = 0.85) +
+  scale_x_discrete(labels = c("Demersal Trawl", "Demersal Seine", "Gilnetters", "Lines and Hooks", "Pelagic Seine", "Pelagic Trawl", "Other"))+
+  labs(
+    x = "Gear",
+    y = "ICES area",
+    title = "Years of coverage by gear group and ICES division (2017-2024)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+Fig3 <- b
+
+ggsave("Fig3.png", Fig3, width = 20, height=16.5, units=c("cm"), dpi=300)
+#grid.arrange(a, b, ncol=2)
+
+```
+
+
+### Coverage by sampling scheme 
+
+
+```{r, fig.dim= c(16, 12)}
+# With zeros - NAs are created by expanding the df
+# These have been left in - Need to check if they correspond to 0 trips sampled
+yearsCellWZ <- dfnor %>%
+  filter(Year >= 2017 & Year < 2025) %>% # 2017 - 2024
+  filter(!SamplingScheme %in% remLB) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoSampScheme = length(unique(SamplingScheme)))
+
+# Without 0's 
+yearsCellWTZ <- dfnor %>%
+  filter(Year >= 2017 & Year < 2025) %>% 
+  filter(!SamplingScheme %in% remLB) %>%
+  filter(NoTripsSampled != 0) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoSampScheme = length(unique(SamplingScheme)))
+
+
+a <- ggplot(yearsCellWZ, aes(x = GearGroup1, y = AreaCode2, fill = factor(NoSampScheme ))) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_d(name = "Number of Sampling schemes") +
+  labs(
+    x = "Gear",
+    y = "ICES area",
+    title = "Unique sampling schme coverage by gear and ICES area incl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+b <- ggplot(yearsCellWTZ, aes(x = GearGroup1, y = AreaCode2, fill = factor(NoSampScheme ))) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_d(name = "Number of Sampling schemes") +
+  labs(
+    x = "Gear",
+    y = "ICES area",
+    title = "Unique sampling scheme coverage by gear and ICES area excl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+grid.arrange(a, b, ncol=2)
+```
+
+### Coverage by sampling effort 
+```{r, fig.dim= c(16, 12)}
+# With zeros - NAs are created by expanding the df
+# These have been left in - Need to check if they correspond to 0 trips sampled
+yearsCellWZ <- dfnor %>%
+  filter(Year >= 2017 & Year < 2025) %>% # 
+  filter(!SamplingScheme %in% remLB) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoTripsSampled = sum(NoTripsSampled, na.rm = TRUE))
+
+# Without 0's 
+yearsCellWTZ <- dfnor %>%
+  filter(Year >= 2017 & Year < 2025) %>% # 
+  filter(!SamplingScheme %in% remLB) %>%
+  filter(NoTripsSampled != 0) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoTripsSampled = sum(NoTripsSampled, na.rm = TRUE))
+
+
+a <- ggplot(yearsCellWZ, aes(x = GearGroup1, y = AreaCode2, fill = NoTripsSampled )) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(name = "Number of trips sampled") +
+  labs(
+    x = "Gear",
+    y = "ICES area",
+    title = "Unique sampling schme coverage by gear and ICES area incl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+b <- ggplot(yearsCellWTZ, aes(x = GearGroup1, y = AreaCode2, fill = NoTripsSampled)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(name = "Number of trips sampled") +
+  labs(
+    x = "Gear",
+    y = "ICES area",
+    title = "Unique sampling scheme coverage by gear and ICES area excl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+grid.arrange(a, b, ncol=2)
+```
+
+### Comparison with CE
+
+```{r, fig.dim= c(16, 12)}
+dfnornew <- filter(dfnor, Source %in% "2025DC") %>%
+  filter(Year >= 2021 & Year < 2025) %>% # 
+  filter(!SamplingScheme %in% remLB) %>%
+  filter(NoTripsSampled != 0) 
+cemerg <- left_join(cef, dfnornew, by = c("AreaCode" = "AreaCode2", "GearGroup" = "GearGroup1"))
+
+cefin <- distinct(cemerg, AreaCode, GearGroup, .orig_row) %>%
+  mutate(Sampled = ifelse(is.na(.orig_row), "No", "Yes")) %>%
+  distinct(AreaCode, GearGroup, Sampled) %>%
+   mutate(GearGroup = factor(GearGroup, levels = c("DemTrawl", "DemSeine","Gillnetters", "LinesHooks", "PelSeine", "PelTrawl", "Others")),
+          AreaCode = factor(AreaCode, levels = unique(ices_divisions$division)))
+
+
+ggplot(cefin , aes(x = GearGroup, y = AreaCode, fill = Sampled)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_d(name = "SAmpled") +
+  labs(
+    x = "Gear",
+    y = "ICES area",
+    title = "Year * gear combination sampled"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+
+## Med
+
+### Coverage by year
+
+```{r, fig.dim= c(16, 12)}
+
+# Factors to be plotted in order 
+dfmed<- med  %>%
+  mutate(AreaCode2 = factor(AreaCode, levels = paste0("GSA ", seq(1:30))),
+         GearGroup1 = factor(GearGroup, levels = c("DemTrawl", "DemSeine","Gillnetters", "LinesHooks", "PelSeine", "PelTrawl", "Others")))
+
+# Remove NAFO areas
+dfmed <- filter(dfmed, !is.na(AreaCode2))
+  
+# With zeros - NAs are created by expanding the df
+# These have been left in - Need to check if they correspond to 0 trips sampled
+yearsCellWZ <- dfmed %>%
+  filter(Year >= 2017 & Year < 2025) %>% # 2017 - 2024
+  filter(!SamplingScheme %in% remLB) %>%
+  filter(is.na(GearGroup1) == F) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoYears = length(unique(Year)))
+
+# Without 0's 
+yearsCellWTZ <- dfmed %>%
+  filter(Year >= 2017 & Year < 2025) %>% 
+  filter(!SamplingScheme %in% remLB) %>%
+  filter(is.na(GearGroup1) == F) %>%
+  filter(NoTripsSampled != 0) %>%
+  filter(is.na(NoTripsSampled) == F) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoYears = length(unique(Year)))
+
+
+a <- ggplot(yearsCellWZ, aes(x = GearGroup1, y = AreaCode2, fill = factor(NoYears))) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_d(name = "Years") +
+  labs(
+    x = "Gear",
+    y = "GSA",
+    title = "Unique year coverage by gear and ICES area incl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+b <- ggplot(yearsCellWTZ, aes(x = GearGroup1, y = AreaCode2, fill = factor(NoYears))) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_d(name = "Years", alpha = 0.85) +
+  scale_x_discrete(labels = c("Demersal Trawl", "Demersal Seine", "Gilnetters", "Lines and Hooks", "Pelagic Seine", "Pelagic Trawl", "Other"))+
+  labs(
+    x = "Gear group",
+    y = "Geographical sub-area (GSA)",
+    title = "Years of coverage by gear group and GFCM geographical sub-area (2017-2024)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+Fig4 <- b
+
+grid.arrange(a, b, ncol=2)
+
+Fig4
+
+ggsave("Fig4.png", Fig4, width = 20.5, height = 10, units = "cm", dpi = 300)
+```
+
+### Coverage by sampling scheme 
+
+```{r, fig.dim= c(16, 12)}
+# With zeros - NAs are created by expanding the df
+# These have been left in - Need to check if they correspond to 0 trips sampled
+yearsCellWZ <- dfmed %>%
+  filter(Year >= 2017 & Year < 2025) %>% # 2017 - 2024
+  filter(!SamplingScheme %in% remLB) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoSampScheme = length(unique(SamplingScheme)))
+
+# Without 0's 
+yearsCellWTZ <- dfmed %>%
+  filter(Year >= 2017 & Year < 2025) %>% 
+  filter(!SamplingScheme %in% remLB) %>%
+  filter(NoTripsSampled != 0) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoSampScheme = length(unique(SamplingScheme)))
+
+
+a <- ggplot(yearsCellWZ, aes(x = GearGroup1, y = AreaCode2, fill = factor(NoSampScheme ))) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_d(name = "Number of Sampling schemes") +
+  labs(
+    x = "Gear",
+    y = "GSA",
+    title = "Unique sampling schme coverage by gear and ICES area incl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+b <- ggplot(yearsCellWTZ, aes(x = GearGroup1, y = AreaCode2, fill = factor(NoSampScheme ))) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_d(name = "Number of Sampling schemes") +
+  labs(
+    x = "Gear",
+    y = "GSA",
+    title = "Unique sampling scheme coverage by gear and ICES area excl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+grid.arrange(a, b, ncol=2)
+```
+
+
+### Coverage by sampling effort 
+
+```{r, fig.dim= c(16, 12)}
+# With zeros - NAs are created by expanding the df
+# These have been left in - Need to check if they correspond to 0 trips sampled
+yearsCellWZ <- dfmed %>%
+  filter(Year >= 2017 & Year < 2025) %>% # 
+  filter(!SamplingScheme %in% remLB) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoTripsSampled = sum(NoTripsSampled, na.rm = TRUE))
+
+# Without 0's 
+yearsCellWTZ <- dfmed %>%
+  filter(Year >= 2017 & Year < 2025) %>% # 
+  filter(!SamplingScheme %in% remLB) %>%
+  filter(NoTripsSampled != 0) %>%
+  group_by(AreaCode2, GearGroup1) %>%
+  summarise(NoTripsSampled = sum(NoTripsSampled, na.rm = TRUE))
+
+
+a <- ggplot(yearsCellWZ, aes(x = GearGroup1, y = AreaCode2, fill = NoTripsSampled )) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(name = "Number of trips sampled") +
+  labs(
+    x = "Gear",
+    y = "ICES area",
+    title = "Unique sampling schme coverage by gear and ICES area incl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+b <- ggplot(yearsCellWTZ, aes(x = GearGroup1, y = AreaCode2, fill = NoTripsSampled)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(name = "Number of trips sampled") +
+  labs(
+    x = "Gear",
+    y = "ICES area",
+    title = "Unique sampling scheme coverage by gear and ICES area excl 0 sampled trips"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+grid.arrange(a, b, ncol=2)
+```
+
+
+```{r}
+d4samType <- d4 %>%
+  group_by(SamplingScheme,MonitoringMethod) %>%
+  summarise(Samname = paste0(unique(SamplingSchemeType), collapse = ","))
+
+```
+
+#Some general patterns over time
+
+```{r}
+#calculate range of programs
+#use only data from this year's call
+d4e <- d4 %>% 
+  mutate(End_year = replace(End_year, is.na(End_year) == T,2025)) %>%
+  mutate(End_year = replace(End_year, End_year == 2026 | End_year == 2027, 2025)) %>%
+  mutate(range = End_year - Start_year) %>%
+  mutate(Start_year = replace(Start_year, Start_year <2017, 2016)) %>%
+  mutate(range = End_year - Start_year +1) %>%
+  mutate(Start_year = replace(Start_year, Start_year <2017, "<2017")) 
+
+#filter for unique programs
+d4_unique <- d4e %>% dplyr::select(Start_year,End_year,SamplingScheme,range, SamplingSchemeType,MonitoringMethod, AreaCode, TargetPopulation) %>%
+  distinct()
+
+#histogram of program lengths
+ggplot(d4e)+
+  geom_bar(aes(range, fill = SamplingSchemeType), color = "darkgrey",stat = "count")+
+  labs(x = "Number of years", y = "Number of programmes", title = "Duration of bycatch monitoring programmes")+
+  scale_y_continuous(expand = c(0,0))+
+  theme_classic()
+
+
+# #pull out columns of interest
+# d4e_sub <- d4 %>% 
+#   filter(!MonitoringMethod == "LB") %>%
+#   mutate(End_year = replace(End_year, is.na(End_year) == T,2025)) %>%
+#   mutate(End_year = replace(End_year, End_year == 2026 | End_year == 2027, 2025)) %>%
+#   filter(Start_year > 2016) %>%
+#   mutate(range = End_year - Start_year +1) %>%
+#   dplyr::select(Start_year,End_year,SamplingScheme,range, SamplingSchemeType,MonitoringMethod,AreaCode)
+
+#expanded data frame for each year
+# d4_byyear <- c()
+# for(i in 1:length(d4e_sub$Start_year)) {
+#   program <- d4e_sub[i,] #pull out unique program
+#   temp <- as.data.frame(matrix(ncol = ncol(d4e_sub) + 1,nrow = program$range))
+#   colnames(temp) <- c(colnames(d4e_sub),"Year")
+#   temp$Year <- seq(program$Start_year,program$End_year,1)
+#   temp[,1:ncol(d4e_sub)] <- program
+#   d4_byyear <- rbind(d4_byyear,temp)
+# }
+# 
+# #time series of program type by monitoring method
+# #MINDFUL THAT WE KNOW THERE ARE ZEROS! Probably not good to do this
+# d4_byyear %>% 
+#   #filter(zero == "no") %>%
+# ggplot() +
+#   geom_bar(aes(x = Year, fill = MonitoringMethod), position = "stack") +
+#   scale_x_continuous(breaks = seq(2017,2025, by = 1), expand = c(0,0)) +
+#   scale_y_continuous(expand = c(0,0))+
+#   theme_classic()
+
+#time series of program type by program type
+# d4_byyear %>% filter(zero == "no") %>%
+# ggplot() +
+#   geom_bar(aes(x = Year, fill = SamplingSchemeType), position = "stack") +
+#   scale_x_continuous(breaks = seq(2017,2025, by = 1), expand = c(0,0)) +
+#   scale_y_continuous(expand = c(0,0))+
+#   theme_classic()
+
+labels <- c("<2017", seq(2017,2025, by = 1))
+
+#time series of programs by type and start year
+Fig1 <- ggplot(data = d4e) +
+  geom_bar(aes(x = Start_year, fill = SamplingSchemeType), position = "stack", color = "black") +
+  scale_x_discrete(breaks = labels) +
+  scale_fill_okabe_ito(alpha = 0.75)+
+  scale_y_continuous(expand = c(0,0))+
+  labs(x = "Initial year", y = "Number of programmes", fill = "Programme Type")+
+  theme_classic()
+
+
+Fig1
+
+ggsave("Fig1.png", Fig1, width = 20, height=10, units=c("cm"), dpi=300)
+
+#time series of programs bysea_star#time series of programs by method and start year
+Fig2<- ggplot(data = d4e) +
+  geom_bar(aes(x = Start_year, fill = MonitoringMethod), position = "stack", color = "black") +
+  scale_x_discrete(breaks = labels) +
+  #scale_fill_viridis_d(direction = -1)+
+  scale_fill_okabe_ito(alpha = 0.75)+
+  scale_y_continuous(expand = c(0,0))+
+  labs(x = "Initial year", y = "Number of programmes", fill = "Method")+
+  theme_classic()
+
+Fig2
+
+ggsave("Fig2.png", Fig2, width = 20, height=10, units=c("cm"), dpi=300)
+
+```
+#Percentage of programs with Sci. Observers
+```{r}
+#percentage of programs with SO
+so <- length(which(d4e$MonitoringMethod %in% c("SO","SO~PO","SO~VO")))
+so/length(d4e$MonitoringMethod)
+
+#number of countries utilizing EM
+em <- d4e %>% filter(MonitoringMethod == "EM") %>%
+  select(Country) %>%
+  distinct()
+```
+#Exclusion criteria
+```{r}
+#looking at exclusion criteria
+exclusion <- d4e %>% filter(ExclusionFlag == "Y") %>%
+  filter(is.na(ExclusionCriteria) == F) %>%
+  mutate(ExclusionCriteria = replace(ExclusionCriteria, ExclusionCriteria == "low fishing effort", "Low fishing effort")) %>%
+  mutate(ExclusionCriteria = replace(ExclusionCriteria, ExclusionCriteria == "Vessel space limitation~Uncooperative vessel", "Uncooperative vessel~Vessel space limitation")) %>%
+  mutate(ExclusionCriteria = replace(ExclusionCriteria, ExclusionCriteria == "Small vessel size~Vessel space limitation~Low fishing effort", "Small vessel size~Low fishing effort~Vessel space limitation"))
+
+Fig7 <- ggplot(data = exclusion) +
+  geom_bar(aes(x= "", fill = ExclusionCriteria), color = "black")+
+  labs(fill = "Exclusion Critera")+
+  coord_polar("y", start = 0)+
+  scale_fill_okabe_ito(alpha = 0.75)+
+  theme_void()
+
+Fig7
+
+ggsave("Fig7.png", Fig7, width = 20, height=8, units=c("cm"), dpi=300)
+
+#curious about how many exclusions relate to uncooperative 
+length(which(exclusion$ExclusionCriteria %in% c("Uncooperative vessel", "Uncooperative vessel~Vessel space limitation", "Uncooperative vessel~Small vessel size")))
+```
+
+#Sampling protocols (species sampled)
+```{r}
+#looking at sampling protocols
+d4e <- d4e %>% filter(!MonitoringMethod == "LB")
+Fig5a <- ggplot(data = d4e) +
+  geom_bar(aes(x= "", fill = SamplingProtocol), color = "black")+
+  scale_fill_okabe_ito(alpha = 0.75, order = c(7:9,1:6))+
+  coord_polar("y", start = 0)+
+  labs(fill = "Sampling Protocol")+
+  theme_void()
+
+#proportion that sample 'All' and 'Protected Species'
+length(which(d4$SamplingProtocol == "All"))/length(d4$SamplingProtocol)
+length(which(d4$SamplingProtocol == "ProtectedSpecies"))/length(d4$SamplingProtocol)
+
+Fig5b <- ggplot(data = d4e) +
+  geom_bar(aes(x=SamplingSchemeType, fill = SamplingProtocol),position = "fill", show.legend = F, color = "black") +
+  scale_x_discrete(expand = c(0,0)) +
+ scale_fill_okabe_ito(alpha = 0.75, order = c(7:9,1:6))+
+  scale_y_continuous(expand = c(0,0))+
+  labs(y = "Proportion", x= "Programme Type")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.9, hjust = 1))
+
+specific <- d4e %>% filter(!SamplingProtocol %in% c("All", "ProtectedSpecies", "Fish~ProtectedSpecies", "ProtectedSpecies~Elasmobranchs")) %>% 
+  count(SamplingProtocol)
+
+Fig5 <- Fig5a + Fig5b + plot_annotation(tag_levels = "A")
+
+Fig5
+
+ggsave("Fig_5.png", Fig5, width = 25, height = 10, units = "cm", dpi = 300)
+```
+#Monitoring coverage
+```{r}
+#exclude logbook programs
+lb <- d4 %>% filter(MonitoringMethod == "LB")
+#look at monitoring coverage relative to thresholds
+hist <- d2 %>% mutate(prop = NoTripsSampled / NoTripsTotal) %>%
+  filter(!SamplingScheme %in% lb$SamplingScheme) %>%
+  filter(prop > 0 & prop <1)
+
+Fig8 <- ggplot(data = hist) +
+  geom_histogram(aes(x=prop), fill = "lightgrey", color = "black", binwidth = 0.01) +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))+
+  geom_vline(xintercept=0.01, color="orange", linetype = "dashed", linewidth = 1)+
+  annotate(x= 0.01, y=+Inf,label = "0.01",vjust = 7, hjust=-0.0001, geom = "label", color = "orange", size = 11/.pt)+
+   geom_vline(xintercept=0.1, color="maroon", linetype = "dashed", linewidth = 1)+
+  annotate(x= 0.1, y=+Inf,label = "0.1",vjust = 7, hjust=-0.0001,geom = "label", color = "maroon",size = 11/.pt)+
+   labs(x = "Proportion", title = "Proportion of fishing trips sampled (2022-2025)", y = "Number of programmes") +
+  theme_classic()
+Fig8
+
+ggsave("Fig8.png", Fig8, width = 20, height = 10, units = "cm", dpi = 300)
+
+#what % of schemes are below 10% threshold
+length(which(hist$prop < 0.1)) / length(hist$prop)
+
+#what % of schemes are below 0.1% threshold
+length(which(hist$prop < 0.001)) / length(hist$prop)
+
+#what % of schemes are below 10% threshold
+length(which(hist$prop < 0.01)) / length(hist$prop)
+
+#how does prop relate to total trips
+ggplot(data = hist) +
+  geom_point(aes(y= NoTripsTotal, x= prop))
+```
+
+Programs that report zeros
+
+```{r}
+#noticed a lot of NAs as well 
+d2e <- d2e %>% mutate(NoTripsSampled = replace(NoTripsSampled, is.na(NoTripsSampled) == T, 0))
+
+zeros <- d2e %>% filter(NoTripsSampled == 0)
+
+#plot by year and by country
+#France mostly!
+ggplot(data = zeros) +
+  geom_bar(aes(x = Year, fill = Country))
+
+
+#are there cases where a program reports zeros in a year
+#Yes, 84 instances
+trips_annual <- d2e %>% group_by(SamplingScheme,Year) %>% 
+  mutate(annual_trips = sum(NoTripsSampled)) %>%
+  dplyr::select(SamplingScheme,Year,annual_trips,Country) %>%
+  distinct()
+
+zeros <- zeros %>% mutate(unique_ID = paste(SamplingScheme,AreaCode,Year, sep = "_"))
+
+d4_byyear <- d4_byyear %>% mutate(unique_ID = paste(SamplingScheme,AreaCode,Year, sep = "_"))
+
+d4_byyear <- d4_byyear %>% mutate(zero = ifelse(unique_ID %in% zeros$unique_ID, "yes","no"))
+
+```
+
+#Perceived importance issues
+```{r}
+#mean range of CF vs. IB
+#function to pull last two letters (=CF or IB)
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+
+#classify by either CF or IB
+d4e <- d4e %>% mutate(SST = substrRight(SamplingSchemeType,2))
+
+d4_importance <- d4e %>% group_by(SST) %>% 
+  mutate(Mammals = mean(ImportanceMammals), Birds = mean(ImportanceBirds), Fish = mean(ImportancePETfish), Elasmobranchs = mean(ImportanceElasm), Reptiles = mean(ImportanceRept)) %>%
+  dplyr::select(SST, Mammals, Birds, Fish, Elasmobranchs, Reptiles) %>% distinct()
+  
+d4_importance <- pivot_longer(d4_importance, !SST, names_to = "Taxon", values_to = "Importance")
+
+Fig6<- ggplot(data = d4_importance) +
+  geom_bar(aes(x = Taxon, y = Importance, fill = SST), stat = "identity", position = "dodge", color = "black") +
+  labs(x = "", y = "Average perceived importance (0-4)", title = "Perceived importance of fishery monitored, relative to other fisheries, for the bycatch of different taxonomic groups", fill = "Sampling Scheme Type") +
+  scale_fill_okabe_ito(alpha = 0.75,labels = c("Commercial fisheries", "Incidental bycatch"))+
+  #scale_fill_discrete(palette = c(pal[6],pal[5]),labels = c("Commercial fisheries", "Incidental bycatch"))+
+  scale_y_continuous(expand = c(0,0))+
+  theme_classic() 
+
+Fig6
+
+ggsave("Fig6.png", Fig6, width = 25, height = 10, units = "cm", dpi = 300)
+```
+
+#Part observed
+```{r}
+part_observed <- d4 %>% group_by(PartObserved) %>% tally()
+length(which(grepl("So", d4$PartObserved) == T))
+
+```
+
+
+
+
+
+
+
+
+
