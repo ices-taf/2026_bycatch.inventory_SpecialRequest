@@ -1,0 +1,18 @@
+{
+  // https://rocker-project.org/images/devcontainer/features.html
+  "name": "TAF dev",
+  "image": "ghcr.io/rocker-org/devcontainer/tidyverse:4.5",
+  "features": {
+    "ghcr.io/rocker-org/devcontainer-features/renv-cache:0": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "tonybaloney.vscode-pets",
+        "esbenp.prettier-vscode",
+        "mechatroner.rainbow-csv",
+        "mermaidchart.vscode-mermaid-chart"
+      ]
+    }
+  }
+}
