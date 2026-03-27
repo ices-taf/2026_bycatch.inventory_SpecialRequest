@@ -1,4 +1,8 @@
 
 worksheet.R
-
 .vscode/
+
+/boot/data/
+/data/
+/model/
+/report/
