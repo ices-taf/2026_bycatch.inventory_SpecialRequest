@@ -44,5 +44,18 @@ names(d2old) <- c(
 d4old <- read_xlsx(paste0(path, "eu.2022.04b_dataset.xlsx"), sheet = "Sample schemes bycatch studies")
 d4old <- d4old[-1, ]
 
+
+# Bind the d2
+d2 <- mutate(d2, Source = "2025DC")
+d2old <- mutate(d2old,
+                NoTripsSampled = as.numeric(NoTripsSampled),
+                NoTripsTotal = as.numeric(NoTripsTotal),
+                Source = "2020DC")
+d2all<- bind_rows(d2, d2old)
+
+# mutate PT-20 to PT and the two codes for Germany
+d2all <- mutate(d2all, Country = ifelse(Country %in% "PT-20", "PT",
+                                        ifelse(Country %in% "DEU", "DE", Country)))
+
 # write out
-write.taf(c("d2", "d2old", "d4", "d4old"), dir = "data", quote = TRUE)
+write.taf(c("d2all", "d4"), dir = "data", quote = TRUE)
