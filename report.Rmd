@@ -1,0 +1,38 @@
+---
+title: "WGCATCH 2025, ToR c BYC inventory"
+author: "Karolina, Sarah"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+
+```{r}
+# PACKAGES
+library(dplyr)
+library(DT)
+```
+
+
+# Overview
+
+Number of countries responded in the 2020 and 2025 datacall respectively.
+
+```{r}
+d2all <- read.taf("data/d2all.csv")
+
+d2Tab <- d2all %>%
+  group_by(Source) %>%
+  summarise(NoCountries = length(unique(Country)),
+            Countries = paste0(sort(unique(Country)), collapse = ", "))
+
+d2Tab  %>%
+  datatable(extensions = 'Buttons', rownames = FALSE,
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+```

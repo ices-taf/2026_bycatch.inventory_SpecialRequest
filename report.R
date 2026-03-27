@@ -7,3 +7,4 @@ library(icesTAF)
 
 mkdir("report")
 
+rmarkdown::render("report.Rmd", output_dir = "report")
