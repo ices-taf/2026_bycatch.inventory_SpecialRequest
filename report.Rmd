@@ -36,3 +36,35 @@ d2Tab  %>%
                            lengthMenu = list(c(10,25,50,-1),
                                              c(10,25,50,"All"))))
 ```
+
+# Data cleaning
+
+## Gear/Metier groupings
+
+The metiers reported by each country were grouped into six categories:
+
+1. Pelagic trawl
+2. Demersal trawl
+3. Demersal seine
+4. Pelagic seine
+5. Lines and hooks
+6. Others
+
+The table below shows how metiers were grouped to the categories above:
+
+```{r}
+tabgear <- readRDS("model/tabgear.rds")
+
+tabgear %>%
+  datatable(extensions = 'Buttons', rownames = FALSE,
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+```
+
+### Coverage by year
+
+```{r}
+knitr::include_graphics("report/Fig3.png")
+```
