@@ -1,6 +1,5 @@
 ---
-title: "WGCATCH 2025, ToR c BYC inventory"
-author: "Karolina, Sarah"
+author: "Karolina Molla Gazi, Sarah Weisberg"
 output: html_document
 ---
 
@@ -37,7 +36,6 @@ d2Tab  %>%
                                              c(10,25,50,"All"))))
 ```
 
-# Data cleaning
 
 ## Gear/Metier groupings
 

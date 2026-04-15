@@ -1,6 +1,6 @@
 library(tidyverse, quietly = TRUE)
 
-# Useful fun
+# Useful functions
 classify_gear <- function(x) {
 
   # capture the NAs
@@ -229,3 +229,8 @@ ices_divisions <- tribble(
   "27.14",    "27.14.a",
   "27.14",    "27.14.b"
 )
+
+#function to pull last two letters (=CF or IB)
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
