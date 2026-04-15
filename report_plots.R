@@ -88,7 +88,7 @@ Fig5b <- ggplot(data = d4e %>% filter(!MonitoringMethod == "LB")) +
 
 Fig5 <- Fig5a + Fig5b + plot_annotation(tag_levels = "A")
 
-ggsave("Fig_5.png", Fig5, width = 25, height = 10, units = "cm", dpi = 300, path = "report")
+ggsave("Fig5.png", Fig5, width = 25, height = 10, units = "cm", dpi = 300, path = "report")
 
 
 # Figure 6 ----------------------------------------------------------------

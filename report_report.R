@@ -1,7 +1,7 @@
 # Produce plots and tables for report
 
-# Before:
-# After:
+# Before: 
+# After: report.html
 
 library(icesTAF)
 
