@@ -1,0 +1,60 @@
+name: Run TAF and publish results
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  taf:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed to create/push branches
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          extra-repositories: |
+            https://cloud.r-project.org
+            https://ices-tools-prod.r-universe.dev
+            https://packagemanager.posit.co/cran/__linux__/jammy/latest
+
+      - name: Install R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::TAF
+
+      - name: Run TAF
+        run: |
+          Rscript -e "TAF::taf.boot()"
+          Rscript -e "TAF::source.all()"
+
+      - name: Commit results to taf branch
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          # Create an orphan taf branch (no history)
+          git checkout --orphan taf
+
+          # Remove only the .github folder from index and working tree
+          if [ -d ".github" ]; then
+            git rm -rf .github
+          fi
+
+          # Force-add TAF folders only if they exist
+          for dir in data model report output boot/data boot/software; do
+            if [ -d "$dir" ]; then
+              git add -f "$dir"
+            fi
+          done
+
+          # Commit only if something was added
+          git diff --cached --quiet || git commit -m "Run TAF and publish results"
+
+          git push origin taf --force
