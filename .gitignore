@@ -2,6 +2,10 @@
 worksheet.R
 .vscode/
 
+/renv/
+.Rprofile
+renv.lock
+
 /boot/data/
 /data/
 /model/
