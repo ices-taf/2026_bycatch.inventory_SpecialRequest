@@ -37,8 +37,8 @@ jobs:
 
       - name: Commit results to taf branch
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.email "github@ices.dk"
+          git config user.name "ices-github-bot"
 
           # Create an orphan taf branch (no history)
           git checkout --orphan taf
